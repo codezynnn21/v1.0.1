@@ -135,17 +135,11 @@ static bool is_cmp(GLenum f) {
 
 static bool is_smoke_size(int w, int h) {
     int mx = std::max(w, h), mn = std::min(w, h);
-    /* Expanded smoke / particle effect sizes for CODM */
-    if (mx < 16 || mn < 16 || mx > 1024) return false;
-    /* common square and double sizes used for effects/particles */
-    return (mx == 32 && mn == 32) || (mx == 64 && mn == 64) ||
-           (mx == 96 && mn == 96) || (mx == 128 && mn == 128) ||
-           (mx == 192 && mn == 192) || (mx == 256 && mn == 256) ||
-           (mx == 384 && mn == 384) || (mx == 512 && mn == 512) ||
-           (mx == 768 && mn == 768) || (mx == 1024 && mn == 1024) ||
-           (mx == 64 && mn == 32) || (mx == 128 && mn == 64) ||
-           (mx == 256 && mn == 128) || (mx == 512 && mn == 256) ||
-           (mx == 128 && mn == 96) || (mx == 256 && mn == 192);
+    if (mx < 16 || mn < 16 || mx > 2048) return false;
+    /* catch common effect / particle sizes including non-exact squares */
+    if (mx == mn && (mx & (mx-1)) == 0) return true;          /* power-of-two squares */
+    if (mx == mn * 2 || mn == mx * 2) return true;            /* doubles */
+    return (mx >= 64 && mx <= 512 && mn >= 32);               /* fallback for effect atlases */
 }
 
 
@@ -249,9 +243,10 @@ static void apply_vulkan_look(VkSamplerCreateInfo *ci) {
     int tt = g_testtex.load();
     int near = g_near.load();
     int blk = g_blk.load();
-    if (fl <= 0 && st <= 0 && tt <= 0 && !(near && blk > 0)) return;
-    if (in_start_delay()) return;
-    if (tl_last_img_protected) return;   /* spare scopes / characters */
+    if (fl <= 0 && st <= 0 && tt <= 0 && !(near && blk > 0) && !g_rmsmoke.load()) return;
+    bool smoke_now = g_rmsmoke.load() && is_smoke_size(tl_last_img_w, tl_last_img_h);
+    if (in_start_delay() && !fl && !smoke_now) return;
+    if (tl_last_img_protected && !smoke_now) return;   /* spare scopes / characters */
 
     /* Force NEAREST so the look matches GLES */
     ci->magFilter = VK_FILTER_NEAREST;
@@ -260,13 +255,10 @@ static void apply_vulkan_look(VkSamplerCreateInfo *ci) {
     ci->anisotropyEnable = 0;
     ci->maxAnisotropy = 1.0f;
 
-    bool smoke_now = g_rmsmoke.load() && is_smoke_size(tl_last_img_w, tl_last_img_h) && !tl_last_img_protected;
     if (fl > 0 || smoke_now) {
-        /* Extreme flat / smoke: force smallest possible mips */
-        static const float FLOD[] = {0.f, 8.f, 10.f, 12.f, 14.f};
-        float lod = smoke_now ? 12.f : FLOD[fl < 4 ? fl : 4];
-        ci->minLod = lod;
-        if (ci->maxLod < ci->minLod) ci->maxLod = ci->minLod + 1.f;
+        /* Extreme flat / smoke: force solid color / pixelated transparent */
+        ci->minLod = 16.0f;
+        if (ci->maxLod < ci->minLod) ci->maxLod = 16.0f;
     } else if (st > 0) {
         /* Detail Cut: modest minLod raise */
         ci->minLod = (float)std::min(st, 4);
@@ -536,8 +528,19 @@ static void (*o_st)(GLenum, GLsizei, GLenum, GLsizei, GLsizei) = nullptr;
 static void h_st(GLenum t, GLsizei lv, GLenum fmt, GLsizei w, GLsizei h) {
     if (g_is_vulkan.load()) { if (o_st) o_st(t, lv, fmt, w, h); return; }
     if (o_st) o_st(t, lv, fmt, w, h);
-    int b = g_bias.load(), k = g_blk.load();
     int mx = std::max(w, h);
+    /* Aggressive Flat: force solid color on every non-protected 2D texture (ground, trees, rocks). */
+    if (g_flat.load() > 0 && t == GL_TEXTURE_2D && mx >= 32 && real_tp && !in_skip((int)fmt, (int)w, (int)h)) {
+        int base = (int)lv - 1; if (base < 0) base = 0;
+        real_tp(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, base);
+        real_tp(GL_TEXTURE_2D, TEX_MAX_LEVEL, base);
+        real_tp(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        real_tp(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        int n = ++g_applied;
+        if (n <= 50 || n % 200 == 0)
+            L("FLAT-AGG #%d %dx%d lv=%d fmt=0x%x base=%d\n", n, w, h, lv, fmt, base);
+    }
+    int b = g_bias.load(), k = g_blk.load();
     bool cand = (t == GL_TEXTURE_2D && lv >= 3 && mx >= 64 && is_cmp(fmt));
     if (t == GL_TEXTURE_2D && mx >= 16) texn_log((int)w, (int)h, (int)lv, (int)fmt, cand);
     if (!cand) return;
@@ -583,20 +586,15 @@ static void h_st(GLenum t, GLsizei lv, GLenum fmt, GLsizei w, GLsizei h) {
         return;
     }
 
-    /* v19 Flat Color: lock to tiny mips so the surface is near-solid color (lighting still applies). */
+    /* Extreme Flat: force solid color on ALL non-protected world textures (ground, trees, rocks). */
     int fl = g_flat.load();
     if (fl > 0) {
-        /* Extreme flat: always target ~1px remaining so grass/ground become solid color */
-        static const int FTGT[] = {0, 1, 1, 1, 1};
-        int tgt = FTGT[fl < 4 ? fl : 4];
-        int base = 0;
-        if (!skip && mx > tgt)
-            while ((mx >> (base + 1)) >= tgt && base < (int)lv - 1) base++;
-        if (base < (int)lv - 1 && !skip) base = (int)lv - 1; /* force absolute smallest mip */
-        grp_note((int)fmt, mx, base > 0);
-        if (base > 0 && real_tp) {
+        bool protected_tex = in_skip((int)fmt, (int)w, (int)h);
+        if (!protected_tex && mx >= 32 && real_tp) {
+            int base = (int)lv - 1;
+            if (base < 0) base = 0;
             real_tp(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, base);
-            real_tp(GL_TEXTURE_2D, TEX_MAX_LEVEL, base);   /* lock: no higher mips */
+            real_tp(GL_TEXTURE_2D, TEX_MAX_LEVEL, base);
             GLuint id = tl_bound[tl_unit];
             if (id > 0 && id < MAXTEX) {
                 g_tf[id] = 1; g_flagged++;
@@ -605,7 +603,7 @@ static void h_st(GLenum t, GLsizei lv, GLenum fmt, GLsizei w, GLsizei h) {
             }
             int n = ++g_applied;
             if (n <= 100 || n % 500 == 0)
-                L("FLAT #%d %dx%d lv=%d fmt=0x%x base=%d tgt=%d\n", n, w, h, lv, fmt, base, tgt);
+                L("FLAT #%d %dx%d lv=%d fmt=0x%x base=%d\n", n, w, h, lv, fmt, base);
         }
         return;
     }
@@ -731,18 +729,22 @@ static void h_ti2(GLenum t, GLint l, GLint ifmt, GLsizei w, GLsizei h, GLint b, 
     if (g_is_vulkan.load()) { if (o_ti2) TIMED(K_TEX, o_ti2(t, l, ifmt, w, h, b, f, ty, p)); return; }
     if (!o_ti2) return;
     if (g_rmsmoke.load() && t == GL_TEXTURE_2D && is_smoke_size((int)w, (int)h) && p) {
-        /* zero the upload so smoke becomes transparent */
         size_t bytes = (size_t)w * h * 4;
         static thread_local std::vector<uint8_t> zbuf;
         zbuf.assign(bytes, 0);
         p = zbuf.data();
-        /* also force extreme pixelated sampling on the bound texture */
-        if (real_tp && tl_bound[tl_unit] > 0) {
-            real_tp(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            real_tp(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            real_tp(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 4);
-            real_tp(GL_TEXTURE_2D, TEX_MAX_LEVEL, 4);
-        }
+    }
+    if (g_flat.load() > 0 && t == GL_TEXTURE_2D && std::max((int)w, (int)h) >= 32 && real_tp && !in_skip(0, (int)w, (int)h)) {
+        real_tp(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        real_tp(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        real_tp(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 8);
+        real_tp(GL_TEXTURE_2D, TEX_MAX_LEVEL, 8);
+    }
+    if (g_rmsmoke.load() && t == GL_TEXTURE_2D && is_smoke_size((int)w, (int)h) && real_tp) {
+        real_tp(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        real_tp(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        real_tp(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 8);
+        real_tp(GL_TEXTURE_2D, TEX_MAX_LEVEL, 8);
     }
     TIMED(K_TEX, o_ti2(t, l, ifmt, w, h, b, f, ty, p));
 }
