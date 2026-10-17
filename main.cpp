@@ -47,7 +47,7 @@
 #endif
 
 /* One place for the version. Keep in sync with module.prop (bump +1 every update). */
-#define VERSION "v1.0.1"
+#define VERSION "v0.36"
 #define PKG "com.garena.game.codm"
 #define DIR "/data/data/" PKG "/files/"
 #define LOGF DIR "codm_tex.log"
@@ -67,7 +67,6 @@
 #define STYF DIR "style.txt"
 #define SEDF DIR "sedge.txt"
 #define FLATF DIR "flat.txt"
-#define SMOKEF DIR "smoke.txt"
 #define TTEXF DIR "testtex.txt"
 #define TTSZF DIR "ttsize.txt"
 #define TTSMF DIR "ttsm.txt"
@@ -133,16 +132,6 @@ static bool is_cmp(GLenum f) {
     return (f >= 0x9270 && f <= 0x9279) || (f >= 0x93b0 && f <= 0x93dd);
 }
 
-static bool is_smoke_size(int w, int h) {
-    int mx = std::max(w, h), mn = std::min(w, h);
-    if (mx < 16 || mn < 16 || mx > 2048) return false;
-    /* catch common effect / particle sizes including non-exact squares */
-    if (mx == mn && (mx & (mx-1)) == 0) return true;          /* power-of-two squares */
-    if (mx == mn * 2 || mn == mx * 2) return true;            /* doubles */
-    return (mx >= 64 && mx <= 512 && mn >= 32);               /* fallback for effect atlases */
-}
-
-
 /* ---------- Pixel Blocks (near.txt, blk.txt) ---------- */
 /* near.txt: 0 = off, 1 = on (default). Only used by the Pixel Blocks path.
    Textures that get a raised base level are also switched to NEAREST
@@ -185,181 +174,9 @@ static void h_del(GLsizei n, const GLuint *ids) {
 static std::atomic<int> g_style{0};
 static std::atomic<int> g_sedge{1};
 static std::atomic<int> g_flat{0};
-static std::atomic<int> g_rmsmoke{0};   /* smoke.txt: 1 = remove smoke textures (make transparent) */
 static std::atomic<int> g_ttsize{0};   /* ttsize.txt: -2 = base level only (shimmers) | -1 = mips capped at level 3 | 0 = normal | 1-3 = coarser pixels (2x, 4x, 8x) */
 static std::atomic<int> g_ttsm{0};     /* ttsm.txt: 0 = sharp | 1 = soft blend between mip levels */
 static std::atomic<int> g_testtex{1};  /* testtex.txt: 0 = off | 1 = True Pixelated (NEAREST sampling, full mip chain) */
-
-static std::atomic<int> g_minsz{64};                 /* minsz.txt: textures smaller than this are left untouched */
-
-static bool in_start_delay();
-static bool in_skip(int fmt, int w, int h);
-
-/* ---------- Minimal Vulkan types (ABI-compatible) for sampler modification ---------- */
-typedef uint32_t VkFlags;
-typedef uint32_t VkBool32;
-typedef int32_t VkResult;
-typedef enum VkFilter { VK_FILTER_NEAREST = 0, VK_FILTER_LINEAR = 1 } VkFilter;
-typedef enum VkSamplerMipmapMode { VK_SAMPLER_MIPMAP_MODE_NEAREST = 0, VK_SAMPLER_MIPMAP_MODE_LINEAR = 1 } VkSamplerMipmapMode;
-typedef enum VkSamplerAddressMode { VK_SAMPLER_ADDRESS_MODE_REPEAT = 0 } VkSamplerAddressMode;
-typedef enum VkCompareOp { VK_COMPARE_OP_NEVER = 0 } VkCompareOp;
-typedef enum VkBorderColor { VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK = 0 } VkBorderColor;
-typedef uint32_t VkSamplerCreateFlags;
-
-typedef struct VkSamplerCreateInfo {
-    uint32_t             sType;
-    const void*          pNext;
-    VkSamplerCreateFlags flags;
-    VkFilter             magFilter;
-    VkFilter             minFilter;
-    VkSamplerMipmapMode  mipmapMode;
-    VkSamplerAddressMode addressModeU;
-    VkSamplerAddressMode addressModeV;
-    VkSamplerAddressMode addressModeW;
-    float                mipLodBias;
-    VkBool32             anisotropyEnable;
-    float                maxAnisotropy;
-    VkBool32             compareEnable;
-    VkCompareOp          compareOp;
-    float                minLod;
-    float                maxLod;
-    VkBorderColor        borderColor;
-    VkBool32             unnormalizedCoordinates;
-} VkSamplerCreateInfo;
-
-typedef void* VkDevice;
-typedef void* VkSampler;
-typedef struct VkAllocationCallbacks { char _pad[64]; } VkAllocationCallbacks;
-
-static VkResult (*o_vkCreateSampler)(VkDevice, const VkSamplerCreateInfo*, const VkAllocationCallbacks*, VkSampler*) = nullptr;
-
-/* Track recent image sizes so we can try to spare scopes / characters */
-static thread_local int tl_last_img_w = 0, tl_last_img_h = 0, tl_last_img_fmt = 0;
-static thread_local bool tl_last_img_protected = false;
-
-static void apply_vulkan_look(VkSamplerCreateInfo *ci) {
-    int fl = g_flat.load();
-    int st = g_style.load();
-    int tt = g_testtex.load();
-    int near = g_near.load();
-    int blk = g_blk.load();
-    if (fl <= 0 && st <= 0 && tt <= 0 && !(near && blk > 0) && !g_rmsmoke.load()) return;
-    bool smoke_now = g_rmsmoke.load() && is_smoke_size(tl_last_img_w, tl_last_img_h);
-    if (in_start_delay() && !fl && !smoke_now) return;
-    if (tl_last_img_protected && !smoke_now) return;   /* spare scopes / characters */
-
-    /* Force NEAREST so the look matches GLES */
-    ci->magFilter = VK_FILTER_NEAREST;
-    ci->minFilter = VK_FILTER_NEAREST;
-    ci->mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    ci->anisotropyEnable = 0;
-    ci->maxAnisotropy = 1.0f;
-
-    if (fl > 0 || smoke_now) {
-        /* Extreme flat / smoke: force solid color / pixelated transparent */
-        ci->minLod = 16.0f;
-        if (ci->maxLod < ci->minLod) ci->maxLod = 16.0f;
-    } else if (st > 0) {
-        /* Detail Cut: modest minLod raise */
-        ci->minLod = (float)std::min(st, 4);
-    } else if (near && blk > 0) {
-        /* Pixel Blocks: coarser effective sampling */
-        int base = 0;
-        int mx = std::max(tl_last_img_w, tl_last_img_h);
-        if (mx > blk) while ((mx >> (base + 1)) >= blk && base < 8) base++;
-        ci->minLod = (float)base;
-    }
-    /* True Pixelated already covered by NEAREST + full chain (minLod left at 0) */
-}
-
-static VkResult h_vkCreateSampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
-                                  const VkAllocationCallbacks *pAllocator, VkSampler *pSampler) {
-    if (!o_vkCreateSampler) return -1;
-    if (!pCreateInfo) return o_vkCreateSampler(device, pCreateInfo, pAllocator, pSampler);
-    VkSamplerCreateInfo ci = *pCreateInfo;
-    apply_vulkan_look(&ci);
-    return o_vkCreateSampler(device, &ci, pAllocator, pSampler);
-}
-
-/* ---------- vkCreateImage tracking (for scope/character protection) ---------- */
-typedef struct VkExtent3D { uint32_t width, height, depth; } VkExtent3D;
-typedef struct VkImageCreateInfo {
-    uint32_t          sType;
-    const void*       pNext;
-    uint32_t          flags;
-    uint32_t          imageType;
-    uint32_t          format;
-    VkExtent3D        extent;
-    uint32_t          mipLevels;
-    uint32_t          arrayLayers;
-    uint32_t          samples;
-    uint32_t          tiling;
-    uint32_t          usage;
-    uint32_t          sharingMode;
-    uint32_t          queueFamilyIndexCount;
-    const uint32_t*   pQueueFamilyIndices;
-    uint32_t          initialLayout;
-} VkImageCreateInfo;
-
-typedef void* VkImage;
-static VkResult (*o_vkCreateImage)(VkDevice, const VkImageCreateInfo*, const VkAllocationCallbacks*, VkImage*) = nullptr;
-
-static std::mutex g_smoke_mu;
-static std::set<VkImage> g_smoke_images;
-
-static VkResult h_vkCreateImage(VkDevice device, const VkImageCreateInfo *pCreateInfo,
-                                const VkAllocationCallbacks *pAllocator, VkImage *pImage) {
-    bool smoke = false;
-    if (pCreateInfo && pCreateInfo->imageType == 1 /* VK_IMAGE_TYPE_2D */) {
-        int w = (int)pCreateInfo->extent.width, h = (int)pCreateInfo->extent.height;
-        int fmt = (int)pCreateInfo->format;
-        tl_last_img_w = w; tl_last_img_h = h; tl_last_img_fmt = fmt;
-        tl_last_img_protected = in_skip(fmt, w, h) || std::max(w, h) < g_minsz.load();
-        smoke = g_rmsmoke.load() && is_smoke_size(w, h) && !tl_last_img_protected;
-    }
-    VkResult res = o_vkCreateImage ? o_vkCreateImage(device, pCreateInfo, pAllocator, pImage) : -1;
-    if (res == 0 && smoke && pImage && *pImage) {
-        std::lock_guard<std::mutex> lk(g_smoke_mu);
-        g_smoke_images.insert(*pImage);
-    }
-    return res;
-}
-
-/* ---------- vkCmdCopyBufferToImage: drop smoke uploads so the texture stays empty/transparent ---------- */
-typedef void* VkCommandBuffer;
-typedef struct VkBufferImageCopy {
-    uint64_t bufferOffset;
-    uint32_t bufferRowLength;
-    uint32_t bufferImageHeight;
-    uint32_t imageSubresource_aspectMask;
-    uint32_t imageSubresource_mipLevel;
-    uint32_t imageSubresource_baseArrayLayer;
-    uint32_t imageSubresource_layerCount;
-    int32_t  imageOffset_x, imageOffset_y, imageOffset_z;
-    uint32_t imageExtent_width, imageExtent_height, imageExtent_depth;
-} VkBufferImageCopy;
-
-static void (*o_vkCmdCopyBufferToImage)(VkCommandBuffer, void* /*VkBuffer*/, VkImage, uint32_t, uint32_t, const VkBufferImageCopy*) = nullptr;
-
-static void h_vkCmdCopyBufferToImage(VkCommandBuffer cmd, void *srcBuffer, VkImage dstImage,
-                                     uint32_t dstImageLayout, uint32_t regionCount, const VkBufferImageCopy *pRegions) {
-    if (g_rmsmoke.load() && dstImage) {
-        std::lock_guard<std::mutex> lk(g_smoke_mu);
-        if (g_smoke_images.count(dstImage)) return;   /* skip upload → smoke texture stays empty */
-    }
-    if (o_vkCmdCopyBufferToImage)
-        o_vkCmdCopyBufferToImage(cmd, srcBuffer, dstImage, dstImageLayout, regionCount, pRegions);
-}
-
-static void (*o_vkDestroyImage)(VkDevice, VkImage, const VkAllocationCallbacks*) = nullptr;
-static void h_vkDestroyImage(VkDevice device, VkImage image, const VkAllocationCallbacks *pAllocator) {
-    if (image) {
-        std::lock_guard<std::mutex> lk(g_smoke_mu);
-        g_smoke_images.erase(image);
-    }
-    if (o_vkDestroyImage) o_vkDestroyImage(device, image, pAllocator);
-}
-static std::atomic<int> g_is_vulkan{0};  /* set when a vk* symbol is requested; GL hooks become no-ops */
 #define TEX_MIN_LOD 0x813A
 #define TEX_MAX_LEVEL 0x813D
 #define TEX_ANISO 0x84FE
@@ -382,7 +199,6 @@ static void tt_filters(GLint &mn, GLint &mg) {
 }
 
 static void h_tp(GLenum t, GLenum p, GLint v) {
-    if (g_is_vulkan.load()) { if (real_tp) real_tp(t, p, v); return; }
     int st = g_style.load();
     int fl = g_flat.load();
     int tt = g_testtex.load();
@@ -413,7 +229,6 @@ static void h_tp(GLenum t, GLenum p, GLint v) {
 
 static void (*o_tpf)(GLenum, GLenum, GLfloat) = nullptr;
 static void h_tpf(GLenum t, GLenum p, GLfloat v) {
-    if (g_is_vulkan.load()) { if (o_tpf) o_tpf(t, p, v); return; }
     if ((g_style.load() > 0 || g_flat.load() > 0 || g_testtex.load() > 0) && p == TEX_ANISO && v > 1.0f) v = 1.0f;
     if (o_tpf) o_tpf(t, p, v);
 }
@@ -426,17 +241,9 @@ static void h_smp(GLuint s, GLenum p, GLint v) {
 
 /* ---------- Texture groups, skip rules, minimum size, start delay ---------- */
 static inline int64_t now_ns();
-static std::atomic<int> g_delay{10};                     /* delay.txt: seconds after launch during which no textures are modified (default 10 protects loading / login) */
+static std::atomic<int> g_minsz{64};                 /* minsz.txt: textures smaller than this are left untouched */
+static std::atomic<int> g_delay{0};                     /* delay.txt: seconds after launch during which no textures are modified */
 static std::atomic<int64_t> g_tstart{0};
-/* True while still inside the start-delay window (or before g_tstart is set). Used by texture
-   filters and by render-scale hooks so login / loading surfaces are never scaled. */
-static bool in_start_delay() {
-    int dl = g_delay.load();
-    if (dl <= 0) return false;
-    int64_t t0 = g_tstart.load();
-    if (t0 == 0) return true;
-    return now_ns() - t0 < (int64_t)dl * 1000000000LL;
-}
 struct Sk { int fmt, a, b; };
 static std::vector<Sk> g_bloff;                      /* bltoff.txt: built-in skip rules disabled from the WebUI; read once at startup */
 static std::vector<Sk> g_skip;                       /* skip.txt: "fmt size" (size 0 = any) or "fmt w h"; read once at startup */
@@ -457,29 +264,23 @@ static void grp_note(int fmt, int sz, bool applied) {
 
 /* Built-in skip rules, compiled in. Each one can be switched off through
    bltoff.txt, which the WebUI manages.
-   Protects scopes, reticles, gun detail, character detail and small UI atlases
-   so only world surfaces (ground, smoke, trees, rocks) receive the look.
-   Loading-screen textures are protected by the default start delay instead. */
+   37497 256x512                  scope / reticle atlas (Lava Remix)
+   37493, 37492, 37497 128x128    small character-detail textures */
 static const Sk g_builtin[] = {
-    /* scopes / reticles / sight atlases — protected from Flat and other looks */
+    /* Scope / reticle protection */
     {37497, 256, 512},
     {37497, 128, 128},
     {37497, 256, 256},
     {37497, 512, 512},
-    {37497, 128, 256},
     {37497, 64,  64},
     {37497, 512, 256},
     {37497, 256, 128},
-    {37497, 1024, 512},
-    {37497, 64, 128},
     {37496, 256, 512},
     {37496, 128, 128},
     {37496, 256, 256},
     {37496, 64,  64},
     {37496, 512, 256},
-    {37496, 256, 128},
-    {37496, 512, 512},
-    /* small character / skin / weapon detail — protected from Flat */
+    /* Character / skin detail protection */
     {37493, 128, 128},
     {37492, 128, 128},
     {37493, 256, 256},
@@ -492,8 +293,6 @@ static const Sk g_builtin[] = {
     {37492, 256, 128},
     {37493, 128, 256},
     {37492, 128, 256},
-    {37493, 64, 128},
-    {37492, 64, 128},
 };
 
 static bool in_skip(int fmt, int w, int h) {
@@ -526,21 +325,9 @@ static void texn_log(int w, int h, int lv, int fmt, bool cand) {
 
 static void (*o_st)(GLenum, GLsizei, GLenum, GLsizei, GLsizei) = nullptr;
 static void h_st(GLenum t, GLsizei lv, GLenum fmt, GLsizei w, GLsizei h) {
-    if (g_is_vulkan.load()) { if (o_st) o_st(t, lv, fmt, w, h); return; }
     if (o_st) o_st(t, lv, fmt, w, h);
-    int mx = std::max(w, h);
-    /* Aggressive Flat: force solid color on every non-protected 2D texture (ground, trees, rocks). */
-    if (g_flat.load() > 0 && t == GL_TEXTURE_2D && mx >= 32 && real_tp && !in_skip((int)fmt, (int)w, (int)h)) {
-        int base = (int)lv - 1; if (base < 0) base = 0;
-        real_tp(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, base);
-        real_tp(GL_TEXTURE_2D, TEX_MAX_LEVEL, base);
-        real_tp(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        real_tp(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        int n = ++g_applied;
-        if (n <= 50 || n % 200 == 0)
-            L("FLAT-AGG #%d %dx%d lv=%d fmt=0x%x base=%d\n", n, w, h, lv, fmt, base);
-    }
     int b = g_bias.load(), k = g_blk.load();
+    int mx = std::max(w, h);
     bool cand = (t == GL_TEXTURE_2D && lv >= 3 && mx >= 64 && is_cmp(fmt));
     if (t == GL_TEXTURE_2D && mx >= 16) texn_log((int)w, (int)h, (int)lv, (int)fmt, cand);
     if (!cand) return;
@@ -548,9 +335,10 @@ static void h_st(GLenum t, GLsizei lv, GLenum fmt, GLsizei w, GLsizei h) {
     bool skip = false;
     if (in_skip((int)fmt, (int)w, (int)h)) { skip = true; g_sk_rule++; }
     else if (mx < g_minsz.load()) { skip = true; g_sk_minsz++; }
-    /* NOTE: textures created during the start delay are NOT revisited afterwards.
-       Default 10 s protects loading / login. Render scale uses the same window. */
-    if (!skip && in_start_delay()) { skip = true; g_sk_delay++; }
+    int dl = g_delay.load();
+    /* NOTE: textures created during the start delay are NOT revisited afterwards, so a delay
+       leaves most game textures untouched. Default is 0; the WebUI explains this. */
+    if (!skip && dl > 0 && now_ns() - g_tstart.load() < (int64_t)dl * 1000000000LL) { skip = true; g_sk_delay++; }
     if (!skip && tl_bound[tl_unit] == 0) g_nobound++;
 
     /* Test Tex: force NEAREST sampling only — full texture data, sharp pixel look. */
@@ -586,15 +374,19 @@ static void h_st(GLenum t, GLsizei lv, GLenum fmt, GLsizei w, GLsizei h) {
         return;
     }
 
-    /* Extreme Flat: force solid color on ALL non-protected world textures (ground, trees, rocks). */
+    /* v19 Flat Color: lock to tiny mips so the surface is near-solid color (lighting still applies). */
     int fl = g_flat.load();
     if (fl > 0) {
-        bool protected_tex = in_skip((int)fmt, (int)w, (int)h);
-        if (!protected_tex && mx >= 32 && real_tp) {
-            int base = (int)lv - 1;
-            if (base < 0) base = 0;
+        /* strength 1..4 → target remaining size ~8, 4, 2, 1 px */
+        static const int FTGT[] = {0, 8, 4, 2, 1};
+        int tgt = FTGT[fl < 4 ? fl : 4];
+        int base = 0;
+        if (!skip && mx > tgt)
+            while ((mx >> (base + 1)) >= tgt && base < (int)lv - 1) base++;
+        grp_note((int)fmt, mx, base > 0);
+        if (base > 0 && real_tp) {
             real_tp(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, base);
-            real_tp(GL_TEXTURE_2D, TEX_MAX_LEVEL, base);
+            real_tp(GL_TEXTURE_2D, TEX_MAX_LEVEL, base);   /* lock: no higher mips */
             GLuint id = tl_bound[tl_unit];
             if (id > 0 && id < MAXTEX) {
                 g_tf[id] = 1; g_flagged++;
@@ -603,7 +395,7 @@ static void h_st(GLenum t, GLsizei lv, GLenum fmt, GLsizei w, GLsizei h) {
             }
             int n = ++g_applied;
             if (n <= 100 || n % 500 == 0)
-                L("FLAT #%d %dx%d lv=%d fmt=0x%x base=%d\n", n, w, h, lv, fmt, base);
+                L("FLAT #%d %dx%d lv=%d fmt=0x%x base=%d tgt=%d\n", n, w, h, lv, fmt, base, tgt);
         }
         return;
     }
@@ -726,45 +518,12 @@ static void h_buf(GLenum t, GLsizeiptr sz, const void *d, GLenum u) {
 
 static void (*o_ti2)(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void *) = nullptr;
 static void h_ti2(GLenum t, GLint l, GLint ifmt, GLsizei w, GLsizei h, GLint b, GLenum f, GLenum ty, const void *p) {
-    if (g_is_vulkan.load()) { if (o_ti2) TIMED(K_TEX, o_ti2(t, l, ifmt, w, h, b, f, ty, p)); return; }
-    if (!o_ti2) return;
-    if (g_rmsmoke.load() && t == GL_TEXTURE_2D && is_smoke_size((int)w, (int)h) && p) {
-        size_t bytes = (size_t)w * h * 4;
-        static thread_local std::vector<uint8_t> zbuf;
-        zbuf.assign(bytes, 0);
-        p = zbuf.data();
-    }
-    if (g_flat.load() > 0 && t == GL_TEXTURE_2D && std::max((int)w, (int)h) >= 32 && real_tp && !in_skip(0, (int)w, (int)h)) {
-        real_tp(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        real_tp(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        real_tp(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 8);
-        real_tp(GL_TEXTURE_2D, TEX_MAX_LEVEL, 8);
-    }
-    if (g_rmsmoke.load() && t == GL_TEXTURE_2D && is_smoke_size((int)w, (int)h) && real_tp) {
-        real_tp(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        real_tp(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        real_tp(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 8);
-        real_tp(GL_TEXTURE_2D, TEX_MAX_LEVEL, 8);
-    }
-    TIMED(K_TEX, o_ti2(t, l, ifmt, w, h, b, f, ty, p));
+    if (!o_ti2) return; TIMED(K_TEX, o_ti2(t, l, ifmt, w, h, b, f, ty, p));
 }
 
 static void (*o_cti2)(GLenum, GLint, GLenum, GLsizei, GLsizei, GLint, GLsizei, const void *) = nullptr;
 static void h_cti2(GLenum t, GLint l, GLenum f, GLsizei w, GLsizei h, GLint b, GLsizei n, const void *p) {
-    if (g_is_vulkan.load()) { if (o_cti2) TIMED(K_TEX, o_cti2(t, l, f, w, h, b, n, p)); return; }
-    if (!o_cti2) return;
-    if (g_rmsmoke.load() && t == GL_TEXTURE_2D && is_smoke_size((int)w, (int)h) && p && n > 0) {
-        static thread_local std::vector<uint8_t> zbuf;
-        zbuf.assign((size_t)n, 0);
-        p = zbuf.data();
-        if (real_tp && tl_bound[tl_unit] > 0) {
-            real_tp(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            real_tp(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            real_tp(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 4);
-            real_tp(GL_TEXTURE_2D, TEX_MAX_LEVEL, 4);
-        }
-    }
-    TIMED(K_TEX, o_cti2(t, l, f, w, h, b, n, p));
+    if (!o_cti2) return; TIMED(K_TEX, o_cti2(t, l, f, w, h, b, n, p));
 }
 
 static void (*o_tsi2)(GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void *) = nullptr;
@@ -1179,8 +938,7 @@ static EGLSurface (*o_cws)(EGLDisplay, EGLConfig, EGLNativeWindowType, const EGL
 static EGLSurface h_cws(EGLDisplay d, EGLConfig c, EGLNativeWindowType win, const EGLint *at) {
     int s = g_scale.load();
     ANativeWindow *nwin = (ANativeWindow *)win;
-    /* Skip scale during start delay so login / loading surfaces stay native (avoids crash on some devices). */
-    if (s > 0 && nwin && !in_start_delay()) {
+    if (s > 0 && nwin) {
         int w = ANativeWindow_getWidth(nwin), h = ANativeWindow_getHeight(nwin);
         if (w > 0 && h > 0) {
             if (w < h) {
@@ -1206,12 +964,10 @@ static EGLSurface h_cws(EGLDisplay d, EGLConfig c, EGLNativeWindowType win, cons
 
 static int32_t (*o_sbg)(ANativeWindow *, int32_t, int32_t, int32_t) = nullptr;
 static int32_t h_sbg(ANativeWindow *w, int32_t ww, int32_t hh, int32_t f) {
-    if (g_is_vulkan.load()) return o_sbg ? o_sbg(w, ww, hh, f) : ANativeWindow_setBuffersGeometry(w, ww, hh, f);
     int s = g_scale.load();
     int n = ++g_sbgn;
     if (n <= 20) L("SBG call %dx%d fmt=%d\n", ww, hh, f);
-    /* Skip scale during start delay so login / loading surfaces stay native. */
-    if (s > 0 && w && !in_start_delay()) {
+    if (s > 0 && w) {
         if (ww == 0 || hh == 0) {
             learn_full(w);                          /* "keep native size": never override, just learn it */
         } else if (ww >= hh && ww >= 640 && hh >= 360) {
@@ -1233,26 +989,9 @@ static void *wrap(const char *n, void *r) {
     if (n[0] == 'v' && n[1] == 'k') {          /* Vulkan entry point requested by libunity */
         static std::atomic<int> vk_once{0};
         if (!vk_once.exchange(1)) {
-            g_is_vulkan = 1;
             st_set("gfx", "vulkan");
             L("GFX vk-symbol %s requested\n", n);
-            L("GFX api=vulkan (detected) - texture looks applied via sampler hooks in %s\n", VERSION);
-        }
-        if (!strcmp(n, "vkCreateSampler")) {
-            if (!o_vkCreateSampler) o_vkCreateSampler = (decltype(o_vkCreateSampler))r;
-            return (void *)h_vkCreateSampler;
-        }
-        if (!strcmp(n, "vkCreateImage")) {
-            if (!o_vkCreateImage) o_vkCreateImage = (decltype(o_vkCreateImage))r;
-            return (void *)h_vkCreateImage;
-        }
-        if (!strcmp(n, "vkCmdCopyBufferToImage")) {
-            if (!o_vkCmdCopyBufferToImage) o_vkCmdCopyBufferToImage = (decltype(o_vkCmdCopyBufferToImage))r;
-            return (void *)h_vkCmdCopyBufferToImage;
-        }
-        if (!strcmp(n, "vkDestroyImage")) {
-            if (!o_vkDestroyImage) o_vkDestroyImage = (decltype(o_vkDestroyImage))r;
-            return (void *)h_vkDestroyImage;
+            L("GFX api=vulkan (detected) - texture effects, fps cap and render scale are NOT supported on Vulkan in %s; use GLES (disable modules that force Vulkan, e.g. core-vulkan)\n", VERSION);
         }
         return r;
     }
@@ -1326,7 +1065,7 @@ struct CfgKey { const char *name; const char *path; int def; bool optional; };
 static const CfgKey CFG_KEYS[] = {
     {"bias", CFGF, 0, false}, {"fps", FPSF, 0, false}, {"scale", SCLF, 0, false}, {"fz", FZF, 1, false},
     {"th", THF, 1, false}, {"core", COREF, 1, false}, {"near", NEARF, 1, false}, {"blk", BLKF, 0, false},
-    {"minsz", MINF, 64, false}, {"delay", DLYF, 10, false}, {"style", STYF, 0, false}, {"sedge", SEDF, 1, false},
+    {"minsz", MINF, 64, false}, {"delay", DLYF, 0, false}, {"style", STYF, 0, false}, {"sedge", SEDF, 1, false},
     {"flat", FLATF, 0, false}, {"testtex", TTEXF, 1, false}, {"ttsize", TTSZF, 0, false}, {"ttsm", TTSMF, 0, false},
     {"hookdelay", HDLYF, 0, true},
 };
@@ -1369,7 +1108,7 @@ static void cfg_audit() {
 static void load_cfg() {
     log_rotate_if_new_version();
     g_scale_safety = 0;
-    g_delay = 10;                                    /* explicit defaults for values whose file is missing or unreadable */
+    g_delay = 0;                                    /* explicit defaults for values whose file is missing or unreadable */
     g_scale = 0;
     cfg_audit();
     FILE *f = fopen(CFGF, "r");
@@ -1451,7 +1190,7 @@ static void load_cfg() {
         fclose(f);
     } else {
         f = fopen(DLYF, "w");
-        if (f) { fprintf(f, "10\n"); fclose(f); }
+        if (f) { fprintf(f, "0\n"); fclose(f); }
     }
     g_skip.clear();
     f = fopen(SKIPF, "r");
@@ -1500,15 +1239,6 @@ static void load_cfg() {
         fclose(f);
     } else {
         f = fopen(FLATF, "w");
-        if (f) { fprintf(f, "0\n"); fclose(f); }
-    }
-    f = fopen(SMOKEF, "r");
-    if (f) {
-        int v = 0;
-        if (fscanf(f, "%d", &v) == 1) g_rmsmoke = v ? 1 : 0;
-        fclose(f);
-    } else {
-        f = fopen(SMOKEF, "w");
         if (f) { fprintf(f, "0\n"); fclose(f); }
     }
     f = fopen(TTEXF, "r");
@@ -1682,8 +1412,8 @@ static void log_start(int mode) {
 #else
     const char *abi = "other";
 #endif
-    L("=== start %s build=%s %s abi=%s mode=%d bias=%d fpscap=%d scale=%d fz=%d th=%d core=%d near=%d blk=%d min=%d delay=%d skip=%d style=%d sedge=%d flat=%d testtex=%d smoke=%d builtin=%d ===\n",
-      VERSION, __DATE__, __TIME__, abi, mode, g_bias.load(), g_fps.load(), g_scale.load(), g_fz.load(), g_th.load(), g_core.load(), g_near.load(), g_blk.load(), g_minsz.load(), g_delay.load(), (int)g_skip.size(), g_style.load(), g_sedge.load(), g_flat.load(), g_testtex.load(), g_rmsmoke.load(), (int)(sizeof g_builtin / sizeof g_builtin[0]));
+    L("=== start %s build=%s %s abi=%s mode=%d bias=%d fpscap=%d scale=%d fz=%d th=%d core=%d near=%d blk=%d min=%d delay=%d skip=%d style=%d sedge=%d flat=%d testtex=%d builtin=%d ===\n",
+      VERSION, __DATE__, __TIME__, abi, mode, g_bias.load(), g_fps.load(), g_scale.load(), g_fz.load(), g_th.load(), g_core.load(), g_near.load(), g_blk.load(), g_minsz.load(), g_delay.load(), (int)g_skip.size(), g_style.load(), g_sedge.load(), g_flat.load(), g_testtex.load(), (int)(sizeof g_builtin / sizeof g_builtin[0]));
     st_set("ver", VERSION); st_seti("pid", (long long)getpid()); st_set("abi", abi); st_set("stage", "started");
     st_seti("started", (long long)time(nullptr));
     st_set("scale_safety", g_scale_safety > 0 ? "forced_off_prev_" + std::to_string(g_scale_safety) : "no");
