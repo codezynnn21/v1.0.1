@@ -463,7 +463,7 @@ body.pend .apply::after { display: block; animation: pulse 1.5s ease-in-out infi
   <div class="view active" id="v-home">
     <section class="card">
       <div class="ch"><h2>Quick test</h2></div>
-      <p class="cap">Di sure kung gumagana? Pindutin mo ito para ma-set ang pang-test: Pixel Blocks (Chunky, 8), start delay 10 s (protektahan ang loading screen), off ang render scale, hook agad (hookdelay 0), min texture size 64. Ino-overwrite nito ang: Look (lahat ng modes), Start delay, Min size, Render scale, Hook delay, Module mode. HINDI nito ginagalaw: FPS cap, Freeze/Thread/Core logs, at skip lists. Tapos Apply, buksan ang CODM, at maglaro ka ng mga 5 minuto.</p>
+      <p class="cap">Di sure kung gumagana? Pindutin mo ito para ma-set ang pang-test: Pixel Blocks (Chunky, 8), walang start delay, off ang render scale, hook agad (hookdelay 0), min texture size 64. Ino-overwrite nito ang: Look (lahat ng modes), Start delay, Min size, Render scale, Hook delay, Module mode. HINDI nito ginagalaw: FPS cap, Freeze/Thread/Core logs, at skip lists. Tapos Apply, buksan ang CODM, at maglaro ka ng mga 5 minuto.</p>
       <button class="btn primary" id="recTest" type="button">Set recommended settings (test)</button>
     </section>
 
@@ -486,7 +486,7 @@ body.pend .apply::after { display: block; animation: pulse 1.5s ease-in-out infi
         </button>
         <button type="button" class="mode" role="radio" aria-checked="false" data-m="3">
           <span class="mt"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3.5"/></svg><b>Flat</b></span>
-          <small>Plain solid — no grass, trees & rocks flat</small>
+          <small>Near-solid colors</small>
         </button>
         <button type="button" class="mode" role="radio" aria-checked="false" data-m="4">
           <span class="mt"><svg viewBox="0 0 24 24"><path d="M4 4h4v4H4zM10 4h4v4h-4zM16 4h4v4h-4zM4 10h4v4H4zM10 10h4v4h-4zM16 10h4v4h-4zM4 16h4v4H4zM10 16h4v4h-4zM16 16h4v4h-4z"/></svg><b>True Pixelated</b></span>
@@ -508,12 +508,6 @@ body.pend .apply::after { display: block; animation: pulse 1.5s ease-in-out infi
         <div class="rh"><span class="lb" id="ttsmL">Edge blend</span><span class="val" id="ttsmV">Sharp</span></div>
         <p class="desc" id="ttsmD"></p>
         <div class="steps" id="ttsmBox" role="radiogroup" aria-labelledby="ttsmL" style="--n:2"></div>
-      </div>
-      <div class="row">
-        <button class="sw" id="smoke" role="switch" aria-checked="false" type="button">
-          <span><span class="t">Remove Smoke</span><span class="d">Makes smoke transparent and pixelated so enemies stay visible</span></span>
-          <span class="knob"></span>
-        </button>
       </div>
     </section>
 
@@ -537,7 +531,7 @@ body.pend .apply::after { display: block; animation: pulse 1.5s ease-in-out infi
       <p class="cap">Gives the game time to finish loading menus and UI before textures are changed.</p>
       <div class="row">
         <div class="rh"><label for="delay">Start delay</label><span class="val" id="delayV">Off</span></div>
-        <p class="desc">Textures created in the first seconds stay original and are never changed later. Default <b>10 s</b> protects the loading screen; lower it only if world textures are also being skipped.</p>
+        <p class="desc">Textures created in the first seconds stay original and are never changed later, so a long delay can make the effect look like it does nothing. Keep it <b>Off</b> unless you need it.</p>
         <input type="range" id="delay" min="0" max="12" step="1" value="0">
       </div>
     </section>
@@ -611,7 +605,7 @@ body.pend .apply::after { display: block; animation: pulse 1.5s ease-in-out infi
             <!-- rows are rendered by renderSkipList() -->
           </div>
           
-          <p class="pnote">Built-in rules protect scopes, reticles, gun detail and character detail so Flat and other looks only affect world surfaces (ground, trees, rocks). Smoke can be removed separately. Loading screen is protected by the default start delay. Switch a rule off to let those textures be changed. Reset defaults restores them.</p>
+          <p class="pnote">Built-in rules protect scopes and character detail. Switch one off or delete it to let those textures be changed. Reset defaults restores them.</p>
         </div>
       </details>
     </section>
@@ -641,7 +635,7 @@ body.pend .apply::after { display: block; animation: pulse 1.5s ease-in-out infi
       <label class="lb" style="display:flex;gap:10px;align-items:center;font-size:14px">
         <input type="checkbox" id="reopen"> Reopen CODM after Apply
       </label>
-      <p class="pnote">Naka-off ito dati pa. Binabasa lang ang settings pag nag-start ang CODM, getss? Isinasara ng Apply ang laro. Kung naka-on ito, bubuksan ulit ang laro pagkatapos ma-save. Texture looks and Remove Smoke work on both OpenGL ES and Vulkan. Vulkan uses sampler hooks for looks and skips smoke image uploads so the texture stays empty. Scopes and characters stay protected.</p>
+      <p class="pnote">Naka-off ito dati pa. Binabasa lang ang settings pag nag-start ang CODM, getss? Isinasara ng Apply ang laro. Kung naka-on ito, bubuksan ulit ang laro pagkatapos ma-save. Sa OpenGL ES lang gumagana ang texture looks, wala silang epekto sa Vulkan.</p>
     </section>
 
     <section class="card">
@@ -673,7 +667,7 @@ body.pend .apply::after { display: block; animation: pulse 1.5s ease-in-out infi
       <div class="stack">
         <div>
           <button class="btn warn" id="reset" type="button">Reset defaults</button>
-          <p class="pnote">Recommended setup: <b>True Pixelated</b> (Normal size, Sharp edges) with 10 s start delay (protects loading screen). Skip rules go back to the built-ins that leave scope / gun / character alone.</p>
+          <p class="pnote">Recommended setup: <b>True Pixelated</b> (Normal size, Sharp edges) with no start delay. Skip rules go back to the built-ins.</p>
         </div>
         <div>
           <button class="btn warn" id="normal" type="button">Back to normal CODM</button>
@@ -752,7 +746,7 @@ body.pend .apply::after { display: block; animation: pulse 1.5s ease-in-out infi
   var REC = {
     blk: 0, bias: 0, near: 1, scale: 0, fps: 0,
     fz: 1, th: 1, core: 1, mode: 4,
-    minsz: 64, delay: 10, style: 0, sedge: 1, flat: 0, testtex: 1, ttsize: 0, ttsm: 0, hookdelay: 0
+    minsz: 64, delay: 0, style: 0, sedge: 1, flat: 0, testtex: 1, ttsize: 0, ttsm: 0, hookdelay: 0
   };
   /* "Back to normal CODM": every effect off (logging, mode and skip lists are left alone) */
   var NORMAL = {
@@ -762,7 +756,7 @@ body.pend .apply::after { display: block; animation: pulse 1.5s ease-in-out infi
   /* what a missing settings file counts as (mirrors how the page reads it) */
   var FALLBACK = {
     blk: 0, bias: 0, near: 1, scale: 0, fps: 0, fz: 1, th: 1, core: 1, mode: 4,
-    minsz: 64, delay: 10, style: 0, sedge: 1, flat: 0, testtex: 0, ttsize: 0, ttsm: 0, hookdelay: 0
+    minsz: 64, delay: 0, style: 0, sedge: 1, flat: 0, testtex: 0, ttsize: 0, ttsm: 0, hookdelay: 0
   };
   var modeFixTried = false;
 
@@ -770,8 +764,8 @@ body.pend .apply::after { display: block; animation: pulse 1.5s ease-in-out infi
   var fake = {
     blk: "0", bias: "0", near: "1", scale: "0", fps: "0",
     fz: "1", th: "1", core: "1", mode: "4",
-    minsz: "64", delay: "10", style: "0", sedge: "1", flat: "0", testtex: "0", ttsize: "0", ttsm: "0",
-    hookdelay: "0", smoke: "0", skip: "", bloff: "", bldel: "", ver: "v1.0.1",
+    minsz: "64", delay: "0", style: "0", sedge: "1", flat: "0", testtex: "0", ttsize: "0", ttsm: "0",
+    hookdelay: "0", skip: "", bloff: "", bldel: "", ver: "v0.36",
     texg: "TEXG t=60 fmt=37812 hex=0x93b4 sz=1024 n=40 ap=40\nTEXG t=60 fmt=37812 hex=0x93b4 sz=2048 n=6 ap=6\nTEXG t=60 fmt=37815 hex=0x93b7 sz=512 n=120 ap=120\nTEXG t=60 fmt=37496 hex=0x9278 sz=256 n=64 ap=60\nTEXG t=60 fmt=37497 hex=0x9279 sz=512 n=12 ap=0",
     ft: "FT fps=55.2 avg=18.1ms p50=17.6 p99=41.3 max=63.0 >33ms=3 >50ms=1 n=276 cap=0 bias=0 scale=100 t=125.0 fz=1"
   };
@@ -801,7 +795,7 @@ body.pend .apply::after { display: block; animation: pulse 1.5s ease-in-out infi
      cur  = what the settings files hold right now
      base = what they held when the page opened or at the last Apply */
   var KEYS = ["bias", "scale", "fps", "fz", "th", "core", "near", "blk", "minsz", "delay",
-              "style", "sedge", "flat", "testtex", "ttsize", "ttsm", "mode", "hookdelay", "smoke"];
+              "style", "sedge", "flat", "testtex", "ttsize", "ttsm", "mode", "hookdelay"];
   var cur = {}, base = null, baseSkipLines = [], baseBlOff = {}, baseBlDel = {};
   function nl(lines) { return lines.slice().sort().join("\n"); }
   function nk(o) { return Object.keys(o).sort().join("|"); }
@@ -825,15 +819,7 @@ body.pend .apply::after { display: block; animation: pulse 1.5s ease-in-out infi
     baseBlOff = Object.assign({}, blOff);
     baseBlDel = Object.assign({}, blDel);
   }
-  var builtins = [
-    "37497 256 512", "37497 128 128", "37497 256 256", "37497 512 512", "37497 128 256", "37497 64 64",
-    "37497 512 256", "37497 256 128", "37497 1024 512", "37497 64 128",
-    "37496 256 512", "37496 128 128", "37496 256 256", "37496 64 64",
-    "37496 512 256", "37496 256 128", "37496 512 512",
-    "37493 128 128", "37492 128 128", "37493 256 256", "37492 256 256", "37493 64 64", "37492 64 64",
-    "37493 512 512", "37492 512 512", "37493 256 128", "37492 256 128", "37493 128 256", "37492 128 256",
-    "37493 64 128", "37492 64 128"
-  ];
+  var builtins = ["37497 256 512", "37493 128 128", "37492 128 128", "37497 128 128"];
 
   function $(id) { return document.getElementById(id); }
   function esc(s) {
@@ -913,7 +899,7 @@ body.pend .apply::after { display: block; animation: pulse 1.5s ease-in-out infi
     var cmd =
       "D=" + D + "; " + ZYG_SCRIPT +
       "[ -d $D ] || { echo NODIR; exit 0; }; " +
-      "for f in bias scale fps fz th core near blk minsz delay style sedge flat testtex ttsize ttsm mode hookdelay smoke; do " +
+      "for f in bias scale fps fz th core near blk minsz delay style sedge flat testtex ttsize ttsm mode hookdelay; do " +
       "  if [ -f $D/$f.txt ]; then printf '%s=' $f; cat $D/$f.txt; else printf '%s=\\n' $f; fi; " +
       "done; " +
       "echo -n 'skip='; [ -f $D/skip.txt ] && cat $D/skip.txt | tr '\\n' '|' || true; echo; " +
@@ -932,7 +918,7 @@ body.pend .apply::after { display: block; animation: pulse 1.5s ease-in-out infi
       "M=/data/adb/modules/codm_tex_logger; " +
       "echo -n 'st='; [ -f $D/codm_tex.status ] && tr '\\n' '|' < $D/codm_tex.status; echo; " +
       "echo inj=$(timeout 5 logcat -d -s codm_tex 2>/dev/null | grep -c postAppSpecialize); " +
-      "echo so=$( { [ -f $M/zygisk/arm64-v8a.so ] || [ -f $M/zygisk/armeabi-v7a.so ]; } && echo 1 || echo 0); echo so64=$([ -f $M/zygisk/arm64-v8a.so ] && echo 1 || echo 0); echo so32=$([ -f $M/zygisk/armeabi-v7a.so ] && echo 1 || echo 0); " +
+      "echo so=$([ -f $M/zygisk/arm64-v8a.so ] && echo 1 || echo 0); " +
       "echo moddis=$([ -f $M/disable ] && echo 1 || echo 0); " +
       "echo pend=$([ -d /data/adb/modules_update/codm_tex_logger ] && echo 1 || echo 0)";
     return sh(cmd).then(function (r) {
@@ -1162,7 +1148,7 @@ body.pend .apply::after { display: block; animation: pulse 1.5s ease-in-out infi
   function setRecommended() {
     if (demo) { toast("Demo mode — nothing was changed."); return; }
     var map = { mode: 4, near: 1, bias: 0, sedge: 1, blk: 8, style: 0, flat: 0, testtex: 0,
-                delay: 10, minsz: 64, scale: 0, hookdelay: 0 };
+                delay: 0, minsz: 64, scale: 0, hookdelay: 0 };
     writeFiles(map).then(function (r) {
       if (!r.ok) { toast("Could not save" + (writeFail ? " (" + writeFail + ")" : "") + ". Is the game folder present and root allowed?"); return; }
       return refresh().then(function () {
@@ -1297,7 +1283,7 @@ body.pend .apply::after { display: block; animation: pulse 1.5s ease-in-out infi
     /* Did the module ever run inside CODM? Any of: a start line in the log, the status file, or the logcat breadcrumb. */
     var injected = !!(s.st || s.nv || parseInt(s.inj, 10) > 0);
     if (!demo && !s.nodir && !injected) {
-      if (s.so === "0") banner("bad", "Wala ang zygisk/*.so (arm64-v8a / armeabi-v7a) sa module folder, kaya walang tatakbo sa CODM. I-reinstall ang zip ng module.");
+      if (s.so === "0") banner("bad", "Wala ang zygisk/arm64-v8a.so sa module folder, kaya walang tatakbo sa CODM. I-reinstall ang zip ng module.");
       else if (s.moddis === "1") banner("bad", "Naka-disable ang module sa manager. I-enable mo, tapos reboot.");
       else if (s.pend === "1") banner("warn", "May naka-pending na update ng module. Mag-reboot muna ang phone, tapos buksan ang CODM.");
       else if (!s.zyg) banner("bad", "Wala akong makitang Zygisk framework (ZygiskNext, ReZygisk, zygisksu, o Zygisk ng Magisk na naka-on), at wala pang bakas na tumakbo ang module sa CODM (walang log, walang status, walang logcat breadcrumb). Kung wala talaga kang Zygisk, hindi tatakbo ang module. Kung meron, buksan ang CODM hanggang lobby tapos balik ka rito.");
@@ -1358,7 +1344,6 @@ body.pend .apply::after { display: block; animation: pulse 1.5s ease-in-out infi
     setSw("fz", s.fz !== "0");
     setSw("th", s.th !== "0");
     setSw("core", s.core !== "0");
-    setSw("smoke", s.smoke === "1");
     updateLogDeps();
 
     var ms = parseInt(s.minsz, 10) || 64, mi = 0;
@@ -1707,7 +1692,7 @@ body.pend .apply::after { display: block; animation: pulse 1.5s ease-in-out infi
   function diagScript() { return "{ " + diagBody() + "; } 2>&1 | " + REDACT; }
   function diagBody() {
     return "P=" + PKG + "; D=" + D + "; L=$D/codm_tex.log; " +
-      "echo '== report'; echo 'UI: v1.0.1'; echo 'shell mode: " + ["direct", "nsenter", "su"][WR] + "'; echo \"settings folder: $D\"; date; " +
+      "echo '== report'; echo 'UI: v0.36'; echo 'shell mode: " + ["direct", "nsenter", "su"][WR] + "'; echo \"settings folder: $D\"; date; " +
       "echo '== who'; id; getenforce 2>&1; " +
       "echo '== root manager'; (ksud -V 2>&1 || ksud --version 2>&1) | head -n 1; magisk -v 2>&1 | head -n 1; apd -V 2>&1 | head -n 1; ls /data/adb 2>&1 | tr '\\n' ' '; echo; " +
       "echo '== device props (ro.product.* can be SPOOFED by other modules: not proof of the real model)'; for k in ro.product.manufacturer ro.product.model ro.product.device ro.build.display.id; do echo \"$k=$(getprop $k)\"; done; " +
@@ -1716,7 +1701,7 @@ body.pend .apply::after { display: block; animation: pulse 1.5s ease-in-out infi
       "echo '== game'; timeout 6 dumpsys package $P 2>/dev/null | grep -m4 -E 'versionName|versionCode|lastUpdateTime'; " +
       "echo '== users'; ls /data/user 2>&1; " +
       "echo '== status summary (each step separate)'; M=/data/adb/modules/codm_tex_logger; " +
-      "echo \"installed=$(sed -n 's/^version=//p' $M/module.prop 2>/dev/null | head -n 1) zygisk_so64=$([ -f $M/zygisk/arm64-v8a.so ] && echo yes || echo NO) zygisk_so32=$([ -f $M/zygisk/armeabi-v7a.so ] && echo yes || echo NO) module_disabled=$([ -f $M/disable ] && echo yes || echo no) pending_update=$([ -d /data/adb/modules_update/codm_tex_logger ] && echo yes || echo no)\"; " +
+      "echo \"installed=$(sed -n 's/^version=//p' $M/module.prop 2>/dev/null | head -n 1) zygisk_so=$([ -f $M/zygisk/arm64-v8a.so ] && echo yes || echo NO) module_disabled=$([ -f $M/disable ] && echo yes || echo no) pending_update=$([ -d /data/adb/modules_update/codm_tex_logger ] && echo yes || echo no)\"; " +
       ZYG_SCRIPT +
       "echo \"injection_breadcrumb_in_logcat=$(timeout 5 logcat -d -s codm_tex 2>/dev/null | grep -c postAppSpecialize)\"; " +
       "ls -ln $D/codm_tex.status 2>&1 | head -n 1; " +
@@ -1724,7 +1709,7 @@ body.pend .apply::after { display: block; animation: pulse 1.5s ease-in-out infi
       "echo \"settings_files_owned_by_game=$(ls -ln $D/*.txt 2>/dev/null | awk '$3!=0' | wc -l) (0 = only root wrote them: the game process never created or repaired any)\"; " +
       "echo '== game dir'; ls -ldZ /data/data/$P /data/data/$P/files 2>&1; ls -ldZ /data/user/*/$P 2>&1; " +
       "echo '== settings folder'; echo \"$D\"; ls -la $D 2>&1 | grep -v -i -E 'login|token|jwt|ticket|passwd|account' | head -n 60; " +
-      "echo '== settings'; for f in bias scale fps fz th core near blk minsz delay style sedge flat testtex ttsize ttsm mode hookdelay smoke; do echo \"$f=$(cat $D/$f.txt 2>/dev/null)\"; done; " +
+      "echo '== settings'; for f in bias scale fps fz th core near blk minsz delay style sedge flat testtex ttsize ttsm mode hookdelay; do echo \"$f=$(cat $D/$f.txt 2>/dev/null)\"; done; " +
       "for f in skip bltoff bltdel; do echo \"-- $f.txt\"; cat $D/$f.txt 2>/dev/null; done; " +
       "echo '== modules'; for m in /data/adb/modules/*; do [ -d \"$m\" ] || continue; if [ -f \"$m/disable\" ]; then s=disabled; else s=on; fi; echo \"${m##*/} ($s) $(sed -n 's/^version=//p' $m/module.prop 2>/dev/null | head -n 1)\"; done; " +
       "echo '== log'; if [ -f $L ]; then echo \"size=$(wc -c < $L) lines=$(wc -l < $L)\"; grep '^=== start' $L | tail -n 3; grep -E '^(GFX|HOOK|GLINFO)' $L | tail -n 8; echo '-- last 40 lines'; tail -n 40 $L; else echo 'no log'; fi; " +
@@ -1822,14 +1807,14 @@ body.pend .apply::after { display: block; animation: pulse 1.5s ease-in-out infi
     });
   });
 
-  ["fz", "th", "core", "smoke"].forEach(function (k) {
+  ["fz", "th", "core"].forEach(function (k) {
     $(k).addEventListener("click", function () {
       var on = !getSw(k);
       var m = {};
       setSw(k, on);
       updateLogDeps();
       m[k] = on ? 1 : 0;
-      save(m, k === "fz" ? "Freeze log" : (k === "th" ? "Thread log" : (k === "core" ? "Core log" : "Remove Smoke")));
+      save(m, k === "fz" ? "Freeze log" : (k === "th" ? "Thread log" : "Core log"));
     });
   });
 
