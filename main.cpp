@@ -192,6 +192,9 @@ static std::atomic<int> g_style{0};
 static std::atomic<int> g_sedge{1};
 static std::atomic<int> g_flat{0};
 static std::atomic<int> g_rmsmoke{0};   /* smoke.txt: 1 = remove smoke textures (make transparent) */
+static std::atomic<int> g_ttsize{0};   /* ttsize.txt: -2 = base level only (shimmers) | -1 = mips capped at level 3 | 0 = normal | 1-3 = coarser pixels (2x, 4x, 8x) */
+static std::atomic<int> g_ttsm{0};     /* ttsm.txt: 0 = sharp | 1 = soft blend between mip levels */
+static std::atomic<int> g_testtex{1};  /* testtex.txt: 0 = off | 1 = True Pixelated (NEAREST sampling, full mip chain) */
 
 static std::atomic<int> g_minsz{64};                 /* minsz.txt: textures smaller than this are left untouched */
 
@@ -257,11 +260,12 @@ static void apply_vulkan_look(VkSamplerCreateInfo *ci) {
     ci->anisotropyEnable = 0;
     ci->maxAnisotropy = 1.0f;
 
-    if (fl > 0) {
-        /* Flat: raise minLod so only the tiniest mips are sampled (strength 1-4) */
-        /* Extreme flat: force smallest possible mips (high minLod locks to 1px-ish solid color) */
+    bool smoke_now = g_rmsmoke.load() && is_smoke_size(tl_last_img_w, tl_last_img_h) && !tl_last_img_protected;
+    if (fl > 0 || smoke_now) {
+        /* Extreme flat / smoke: force smallest possible mips */
         static const float FLOD[] = {0.f, 8.f, 10.f, 12.f, 14.f};
-        ci->minLod = FLOD[fl < 4 ? fl : 4];
+        float lod = smoke_now ? 12.f : FLOD[fl < 4 ? fl : 4];
+        ci->minLod = lod;
         if (ci->maxLod < ci->minLod) ci->maxLod = ci->minLod + 1.f;
     } else if (st > 0) {
         /* Detail Cut: modest minLod raise */
@@ -364,9 +368,6 @@ static void h_vkDestroyImage(VkDevice device, VkImage image, const VkAllocationC
     if (o_vkDestroyImage) o_vkDestroyImage(device, image, pAllocator);
 }
 static std::atomic<int> g_is_vulkan{0};  /* set when a vk* symbol is requested; GL hooks become no-ops */
-static std::atomic<int> g_ttsize{0};   /* ttsize.txt: -2 = base level only (shimmers) | -1 = mips capped at level 3 | 0 = normal | 1-3 = coarser pixels (2x, 4x, 8x) */
-static std::atomic<int> g_ttsm{0};     /* ttsm.txt: 0 = sharp | 1 = soft blend between mip levels */
-static std::atomic<int> g_testtex{1};  /* testtex.txt: 0 = off | 1 = True Pixelated (NEAREST sampling, full mip chain) */
 #define TEX_MIN_LOD 0x813A
 #define TEX_MAX_LEVEL 0x813D
 #define TEX_ANISO 0x84FE
@@ -585,7 +586,6 @@ static void h_st(GLenum t, GLsizei lv, GLenum fmt, GLsizei w, GLsizei h) {
     /* v19 Flat Color: lock to tiny mips so the surface is near-solid color (lighting still applies). */
     int fl = g_flat.load();
     if (fl > 0) {
-        /* strength 1..4 → target remaining size ~8, 4, 2, 1 px */
         /* Extreme flat: always target ~1px remaining so grass/ground become solid color */
         static const int FTGT[] = {0, 1, 1, 1, 1};
         int tgt = FTGT[fl < 4 ? fl : 4];
@@ -731,11 +731,18 @@ static void h_ti2(GLenum t, GLint l, GLint ifmt, GLsizei w, GLsizei h, GLint b, 
     if (g_is_vulkan.load()) { if (o_ti2) TIMED(K_TEX, o_ti2(t, l, ifmt, w, h, b, f, ty, p)); return; }
     if (!o_ti2) return;
     if (g_rmsmoke.load() && t == GL_TEXTURE_2D && is_smoke_size((int)w, (int)h) && p) {
-        /* zero the upload so smoke becomes transparent / invisible */
-        size_t bytes = (size_t)w * h * 4; /* conservative; real size depends on format */
+        /* zero the upload so smoke becomes transparent */
+        size_t bytes = (size_t)w * h * 4;
         static thread_local std::vector<uint8_t> zbuf;
         zbuf.assign(bytes, 0);
         p = zbuf.data();
+        /* also force extreme pixelated sampling on the bound texture */
+        if (real_tp && tl_bound[tl_unit] > 0) {
+            real_tp(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            real_tp(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            real_tp(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 4);
+            real_tp(GL_TEXTURE_2D, TEX_MAX_LEVEL, 4);
+        }
     }
     TIMED(K_TEX, o_ti2(t, l, ifmt, w, h, b, f, ty, p));
 }
@@ -748,6 +755,12 @@ static void h_cti2(GLenum t, GLint l, GLenum f, GLsizei w, GLsizei h, GLint b, G
         static thread_local std::vector<uint8_t> zbuf;
         zbuf.assign((size_t)n, 0);
         p = zbuf.data();
+        if (real_tp && tl_bound[tl_unit] > 0) {
+            real_tp(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            real_tp(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            real_tp(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 4);
+            real_tp(GL_TEXTURE_2D, TEX_MAX_LEVEL, 4);
+        }
     }
     TIMED(K_TEX, o_cti2(t, l, f, w, h, b, n, p));
 }
