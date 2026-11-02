@@ -47,7 +47,7 @@
 #endif
 
 /* One place for the version. Keep in sync with module.prop (bump +1 every update). */
-#define VERSION "v0.38"
+#define VERSION "v1.0.1"
 #define PKG "com.garena.game.codm"
 #define DIR "/data/data/" PKG "/files/"
 #define LOGF DIR "codm_tex.log"
@@ -330,7 +330,12 @@ static void h_st(GLenum t, GLsizei lv, GLenum fmt, GLsizei w, GLsizei h) {
     if (o_st) o_st(t, lv, fmt, w, h);
     int b = g_bias.load(), k = g_blk.load();
     int mx = std::max(w, h);
-    bool cand = (t == GL_TEXTURE_2D && lv >= 3 && mx >= 64 && is_cmp(fmt));
+    int fl_early = g_flat.load();
+    /* Flat max: catch ground/grass even with few mips or non-standard sizes */
+    bool cand = (t == GL_TEXTURE_2D && (
+        (fl_early >= 4 && mx >= 16 && lv >= 1) ||
+        (lv >= 3 && mx >= 64 && is_cmp(fmt))
+    ));
     if (t == GL_TEXTURE_2D && mx >= 16) texn_log((int)w, (int)h, (int)lv, (int)fmt, cand);
     if (!cand) return;
     g_cand++;
@@ -375,20 +380,29 @@ static void h_st(GLenum t, GLsizei lv, GLenum fmt, GLsizei w, GLsizei h) {
         return;
     }
 
-    /* v19 Flat Color: lock to tiny mips so the surface is near-solid color (lighting still applies). */
+    /* Flat Color: lock to tiniest mip so surface is solid color (kills grass/detail). */
     int fl = g_flat.load();
     if (fl > 0) {
-        /* strength 1..4 → target remaining size ~8, 4, 2, 1 px */
+        /* strength 1..4 → target remaining size ~8, 4, 2, 1 px; fl>=4 always 1px solid */
         static const int FTGT[] = {0, 8, 4, 2, 1};
         int tgt = FTGT[fl < 4 ? fl : 4];
+        if (fl >= 4) tgt = 1;  /* hard solid — strip grass / ground detail */
         int base = 0;
-        if (!skip && mx > tgt)
+        if (!skip && mx > tgt && lv >= 1) {
             while ((mx >> (base + 1)) >= tgt && base < (int)lv - 1) base++;
-        grp_note((int)fmt, mx, base > 0);
-        if (base > 0 && real_tp) {
-            real_tp(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, base);
-            real_tp(GL_TEXTURE_2D, TEX_MAX_LEVEL, base);   /* lock: no higher mips */
+            /* if only 1-2 mips, still lock to last available for solid fill */
+            if (base == 0 && lv >= 1 && mx >= 16) base = (int)lv - 1;
+        }
+        grp_note((int)fmt, mx, base > 0 || (fl >= 4 && !skip));
+        if (!skip && real_tp) {
             GLuint id = tl_bound[tl_unit];
+            if (base > 0) {
+                real_tp(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, base);
+                real_tp(GL_TEXTURE_2D, TEX_MAX_LEVEL, base);   /* lock: no higher mips */
+            } else if (fl >= 4 && lv >= 1) {
+                /* single-level or tiny: still force NEAREST so no bilinear grass bleed */
+                base = 0;
+            }
             if (id > 0 && id < MAXTEX) {
                 g_tf[id] = 1; g_flagged++;
                 real_tp(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -396,7 +410,7 @@ static void h_st(GLenum t, GLsizei lv, GLenum fmt, GLsizei w, GLsizei h) {
             }
             int n = ++g_applied;
             if (n <= 100 || n % 500 == 0)
-                L("FLAT #%d %dx%d lv=%d fmt=0x%x base=%d tgt=%d\n", n, w, h, lv, fmt, base, tgt);
+                L("FLAT #%d %dx%d lv=%d fmt=0x%x base=%d tgt=%d solid=%d\n", n, w, h, lv, fmt, base, tgt, fl >= 4 ? 1 : 0);
         }
         return;
     }
