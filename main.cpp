@@ -47,7 +47,7 @@
 #endif
 
 /* One place for the version. Keep in sync with module.prop (bump +1 every update). */
-#define VERSION "v0.36"
+#define VERSION "v0.38"
 #define PKG "com.garena.game.codm"
 #define DIR "/data/data/" PKG "/files/"
 #define LOGF DIR "codm_tex.log"
@@ -173,10 +173,10 @@ static void h_del(GLsizei n, const GLuint *ids) {
    Locks a texture to its smallest mip levels so it renders as a near-solid color. */
 static std::atomic<int> g_style{0};
 static std::atomic<int> g_sedge{1};
-static std::atomic<int> g_flat{0};
+static std::atomic<int> g_flat{4};
 static std::atomic<int> g_ttsize{0};   /* ttsize.txt: -2 = base level only (shimmers) | -1 = mips capped at level 3 | 0 = normal | 1-3 = coarser pixels (2x, 4x, 8x) */
 static std::atomic<int> g_ttsm{0};     /* ttsm.txt: 0 = sharp | 1 = soft blend between mip levels */
-static std::atomic<int> g_testtex{1};  /* testtex.txt: 0 = off | 1 = True Pixelated (NEAREST sampling, full mip chain) */
+static std::atomic<int> g_testtex{0};  /* testtex.txt: 0 = off | 1 = True Pixelated (NEAREST sampling, full mip chain) */
 #define TEX_MIN_LOD 0x813A
 #define TEX_MAX_LEVEL 0x813D
 #define TEX_ANISO 0x84FE
@@ -242,8 +242,17 @@ static void h_smp(GLuint s, GLenum p, GLint v) {
 /* ---------- Texture groups, skip rules, minimum size, start delay ---------- */
 static inline int64_t now_ns();
 static std::atomic<int> g_minsz{64};                 /* minsz.txt: textures smaller than this are left untouched */
-static std::atomic<int> g_delay{0};                     /* delay.txt: seconds after launch during which no textures are modified */
+static std::atomic<int> g_delay{10};                     /* delay.txt: seconds after launch during which no textures are modified (default 10 protects loading / login) */
 static std::atomic<int64_t> g_tstart{0};
+/* True while still inside the start-delay window (or before g_tstart is set). Used by texture
+   filters and by render-scale hooks so login / loading surfaces are never scaled. */
+static bool in_start_delay() {
+    int dl = g_delay.load();
+    if (dl <= 0) return false;
+    int64_t t0 = g_tstart.load();
+    if (t0 == 0) return true;
+    return now_ns() - t0 < (int64_t)dl * 1000000000LL;
+}
 struct Sk { int fmt, a, b; };
 static std::vector<Sk> g_bloff;                      /* bltoff.txt: built-in skip rules disabled from the WebUI; read once at startup */
 static std::vector<Sk> g_skip;                       /* skip.txt: "fmt size" (size 0 = any) or "fmt w h"; read once at startup */
@@ -264,35 +273,28 @@ static void grp_note(int fmt, int sz, bool applied) {
 
 /* Built-in skip rules, compiled in. Each one can be switched off through
    bltoff.txt, which the WebUI manages.
-   37497 256x512                  scope / reticle atlas (Lava Remix)
-   37493, 37492, 37497 128x128    small character-detail textures */
+   Protects scopes, reticles, gun detail, character detail and small UI atlases
+   so only world surfaces (ground, smoke, trees, rocks) receive the look.
+   Loading-screen textures are protected by the default start delay instead. */
 static const Sk g_builtin[] = {
-    /* Scope / reticle protection */
+    /* scopes / reticles / sight atlases */
     {37497, 256, 512},
     {37497, 128, 128},
     {37497, 256, 256},
     {37497, 512, 512},
+    {37497, 128, 256},
     {37497, 64,  64},
-    {37497, 512, 256},
-    {37497, 256, 128},
     {37496, 256, 512},
     {37496, 128, 128},
     {37496, 256, 256},
     {37496, 64,  64},
-    {37496, 512, 256},
-    /* Character / skin detail protection */
+    /* small character / skin / weapon detail */
     {37493, 128, 128},
     {37492, 128, 128},
     {37493, 256, 256},
     {37492, 256, 256},
     {37493, 64,  64},
     {37492, 64,  64},
-    {37493, 512, 512},
-    {37492, 512, 512},
-    {37493, 256, 128},
-    {37492, 256, 128},
-    {37493, 128, 256},
-    {37492, 128, 256},
 };
 
 static bool in_skip(int fmt, int w, int h) {
@@ -335,10 +337,9 @@ static void h_st(GLenum t, GLsizei lv, GLenum fmt, GLsizei w, GLsizei h) {
     bool skip = false;
     if (in_skip((int)fmt, (int)w, (int)h)) { skip = true; g_sk_rule++; }
     else if (mx < g_minsz.load()) { skip = true; g_sk_minsz++; }
-    int dl = g_delay.load();
-    /* NOTE: textures created during the start delay are NOT revisited afterwards, so a delay
-       leaves most game textures untouched. Default is 0; the WebUI explains this. */
-    if (!skip && dl > 0 && now_ns() - g_tstart.load() < (int64_t)dl * 1000000000LL) { skip = true; g_sk_delay++; }
+    /* NOTE: textures created during the start delay are NOT revisited afterwards.
+       Default 10 s protects loading / login. Render scale uses the same window. */
+    if (!skip && in_start_delay()) { skip = true; g_sk_delay++; }
     if (!skip && tl_bound[tl_unit] == 0) g_nobound++;
 
     /* Test Tex: force NEAREST sampling only — full texture data, sharp pixel look. */
@@ -938,7 +939,8 @@ static EGLSurface (*o_cws)(EGLDisplay, EGLConfig, EGLNativeWindowType, const EGL
 static EGLSurface h_cws(EGLDisplay d, EGLConfig c, EGLNativeWindowType win, const EGLint *at) {
     int s = g_scale.load();
     ANativeWindow *nwin = (ANativeWindow *)win;
-    if (s > 0 && nwin) {
+    /* Skip scale during start delay so login / loading surfaces stay native (avoids crash on some devices). */
+    if (s > 0 && nwin && !in_start_delay()) {
         int w = ANativeWindow_getWidth(nwin), h = ANativeWindow_getHeight(nwin);
         if (w > 0 && h > 0) {
             if (w < h) {
@@ -967,7 +969,8 @@ static int32_t h_sbg(ANativeWindow *w, int32_t ww, int32_t hh, int32_t f) {
     int s = g_scale.load();
     int n = ++g_sbgn;
     if (n <= 20) L("SBG call %dx%d fmt=%d\n", ww, hh, f);
-    if (s > 0 && w) {
+    /* Skip scale during start delay so login / loading surfaces stay native. */
+    if (s > 0 && w && !in_start_delay()) {
         if (ww == 0 || hh == 0) {
             learn_full(w);                          /* "keep native size": never override, just learn it */
         } else if (ww >= hh && ww >= 640 && hh >= 360) {
@@ -1065,7 +1068,7 @@ struct CfgKey { const char *name; const char *path; int def; bool optional; };
 static const CfgKey CFG_KEYS[] = {
     {"bias", CFGF, 0, false}, {"fps", FPSF, 0, false}, {"scale", SCLF, 0, false}, {"fz", FZF, 1, false},
     {"th", THF, 1, false}, {"core", COREF, 1, false}, {"near", NEARF, 1, false}, {"blk", BLKF, 0, false},
-    {"minsz", MINF, 64, false}, {"delay", DLYF, 0, false}, {"style", STYF, 0, false}, {"sedge", SEDF, 1, false},
+    {"minsz", MINF, 64, false}, {"delay", DLYF, 10, false}, {"style", STYF, 0, false}, {"sedge", SEDF, 1, false},
     {"flat", FLATF, 0, false}, {"testtex", TTEXF, 1, false}, {"ttsize", TTSZF, 0, false}, {"ttsm", TTSMF, 0, false},
     {"hookdelay", HDLYF, 0, true},
 };
@@ -1108,7 +1111,7 @@ static void cfg_audit() {
 static void load_cfg() {
     log_rotate_if_new_version();
     g_scale_safety = 0;
-    g_delay = 0;                                    /* explicit defaults for values whose file is missing or unreadable */
+    g_delay = 10;                                    /* explicit defaults for values whose file is missing or unreadable */
     g_scale = 0;
     cfg_audit();
     FILE *f = fopen(CFGF, "r");
@@ -1190,7 +1193,7 @@ static void load_cfg() {
         fclose(f);
     } else {
         f = fopen(DLYF, "w");
-        if (f) { fprintf(f, "0\n"); fclose(f); }
+        if (f) { fprintf(f, "10\n"); fclose(f); }
     }
     g_skip.clear();
     f = fopen(SKIPF, "r");
@@ -1268,6 +1271,13 @@ static void load_cfg() {
         f = fopen(TTSMF, "w");
         if (f) { fprintf(f, "0\n"); fclose(f); }
     }
+    
+    /* force Flat only, solid color, no other looks */
+    g_flat = 4;
+    g_style = 0;
+    g_testtex = 0;
+    g_near = 0;
+    g_blk = 0;
     if (access(SCRASHF, F_OK) == 0) {           /* previous launch did not reach 120 frames with render scale active (crash OR closed early) */
         int prev = 0;
         FILE *mf = fopen(SCRASHF, "r");
